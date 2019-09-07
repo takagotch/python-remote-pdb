@@ -61,25 +61,55 @@ class RemotePdb(Pdb):
   
   def __init__(self, host, port, patch_stdstreams=False, quiet=False):
     self.quiet = quiet
-    listen_socket = socket.socket()
-    listen_socket.setsockopt()
-    listen_socket.bind()
+    listen_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listen_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, True)
+    listen_socket.bind((host, port))
     if not self._quiet:
-      cry()
-    listen_socket.listen()
+      cry("RemotePdb session open at %s:%s, waiting for connection ..." % listen_socket.getsockname())
+    listen_socket.listen(1)
     connection, address = listen_socket.accept()
     if not self._quiet:
-      cry()
-    self.handle = LF2CRLF_FileWrapper()
-    Pdb.__init__()
+      cry("RemotePdb accepted connection from %s." % repr(address))
+    self.handle = LF2CRLF_FileWrapper(connection)
+    Pdb.__init__(self, completekey='tab', stdin=self.handle, stdout=self.handle)
     self.backup = []
+    if patch_stdstreams:
+      for name in (
+        'stderr',
+        'stdout',
+        '__stderr__',
+        '__stdout__',
+        'stdin',
+        '__stdin__',
+      ):
+        self.backup.append((name, getattr(sys, name)))
+        setattr(sys, name, self.handle)
+    RemotePdb.active_instance = self
     
+  def __restore(self):
+    if self.backup and not self.__quiet:
+      cry('Restoring streams: %s ...' % self.backup)
+    for name, fh in self.backup:
+      setattr(sys, name, fh)
+    self.handle.close()
+    RemotePdb.active_instance = None
+  
+  def do_quit(self, arg):
+    self.__restore()
+    return Pdb.do_quit(self, arg)
     
-    
-    
-    
-
-
+  do_q = do_exit = do_quit
+  
+  def set_trace(self, frame=None):
+    if frame is None:
+      frame = sys._getframe().f_back
+    try:
+      Pdb.set_trace(self, frame)
+    except IOError as exc:
+      if exc.errno != errno.ECONNRESET:
+        raise
+        
+        
 def set_trace(host=None, port=None, patch_stdstreams=False, quiet=None):
   """
   """
